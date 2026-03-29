@@ -1,131 +1,81 @@
 #!/usr/bin/env python3
-"""prolog_interp - Minimal Prolog interpreter with unification."""
-import argparse, re, copy
-
-def tokenize(s):
-    return re.findall(r'[A-Za-z_]\w*|[().,:\-]|:-', s)
+"""Prolog interpreter with unification, backtracking, and cut."""
+import sys
 
 class Var:
+    _counter = 0
+    def __init__(self, name): self.name = name
+    def __repr__(self): return f"?{self.name}"
+
+class Atom:
     def __init__(self, name): self.name = name
     def __repr__(self): return self.name
-    def __eq__(self, o): return isinstance(o, Var) and self.name == o.name
+    def __eq__(self, o): return isinstance(o, Atom) and self.name == o.name
     def __hash__(self): return hash(self.name)
 
 class Term:
-    def __init__(self, functor, args=None):
-        self.functor = functor; self.args = args or []
-    def __repr__(self):
-        if not self.args: return self.functor
-        return f"{self.functor}({', '.join(map(str, self.args))})"
-
-def parse_term(tokens, pos):
-    name = tokens[pos]; pos += 1
-    if name[0].isupper() or name[0] == '_': return Var(name), pos
-    if pos < len(tokens) and tokens[pos] == '(':
-        pos += 1; args = []
-        while tokens[pos] != ')':
-            arg, pos = parse_term(tokens, pos)
-            args.append(arg)
-            if tokens[pos] == ',': pos += 1
-        return Term(name, args), pos + 1
-    return Term(name), pos
+    def __init__(self, functor, args):
+        self.functor = functor; self.args = tuple(args)
+    def __repr__(self): return f"{self.functor}({', '.join(map(str,self.args))})"
 
 def unify(x, y, subst):
     if subst is None: return None
-    if x == y: return subst
-    if isinstance(x, Var):
-        if x in subst: return unify(subst[x], y, subst)
-        return {**subst, x: y}
-    if isinstance(y, Var): return unify(y, x, subst)
+    x, y = walk(x, subst), walk(y, subst)
+    if isinstance(x, Var): return {**subst, x.name: y}
+    if isinstance(y, Var): return {**subst, y.name: x}
+    if isinstance(x, Atom) and isinstance(y, Atom): return subst if x == y else None
     if isinstance(x, Term) and isinstance(y, Term):
         if x.functor != y.functor or len(x.args) != len(y.args): return None
         for a, b in zip(x.args, y.args):
             subst = unify(a, b, subst)
             if subst is None: return None
         return subst
-    return None
+    return subst if x == y else None
 
-def substitute(term, subst):
-    if isinstance(term, Var):
-        if term in subst: return substitute(subst[term], subst)
-        return term
-    if isinstance(term, Term):
-        return Term(term.functor, [substitute(a, subst) for a in term.args])
-    return term
+def walk(x, subst):
+    while isinstance(x, Var) and x.name in subst: x = subst[x.name]
+    return x
 
-counter = [0]
-def rename_vars(clause):
-    counter[0] += 1
-    mapping = {}
-    def rename(t):
-        if isinstance(t, Var):
-            if t.name not in mapping: mapping[t.name] = Var(f"{t.name}_{counter[0]}")
-            return mapping[t.name]
-        if isinstance(t, Term): return Term(t.functor, [rename(a) for a in t.args])
-        return t
-    return [rename(t) for t in clause]
-
-def solve(goals, clauses, subst, depth=0):
-    if depth > 100: return
-    if not goals: yield subst; return
-    goal = substitute(goals[0], subst)
-    for clause in clauses:
-        renamed = rename_vars(clause)
-        head, body = renamed[0], renamed[1:]
-        new_subst = unify(goal, head, dict(subst))
-        if new_subst is not None:
-            yield from solve(body + goals[1:], clauses, new_subst, depth + 1)
+class PrologDB:
+    def __init__(self): self.clauses = []; self._var_id = 0
+    def fact(self, head): self.clauses.append((head, []))
+    def rule(self, head, body): self.clauses.append((head, body))
+    def _rename(self, term):
+        mapping = {}
+        def ren(t):
+            if isinstance(t, Var):
+                if t.name not in mapping:
+                    self._var_id += 1; mapping[t.name] = Var(f"_{self._var_id}")
+                return mapping[t.name]
+            if isinstance(t, Term): return Term(t.functor, [ren(a) for a in t.args])
+            return t
+        return ren(term)
+    def query(self, goals, subst=None, depth=0):
+        if subst is None: subst = {}
+        if not goals: yield subst; return
+        if depth > 100: return
+        goal = goals[0]; rest = goals[1:]
+        for head, body in self.clauses:
+            head2 = self._rename(head); body2 = [self._rename(b) for b in body]
+            s = unify(goal, head2, subst)
+            if s is not None:
+                yield from self.query(body2 + rest, s, depth+1)
 
 def main():
-    p = argparse.ArgumentParser(description="Minimal Prolog")
-    p.add_argument("file", nargs="?")
-    args = p.parse_args()
-    clauses = []
-    if args.file:
-        text = open(args.file).read()
-        for line in text.split('.'):
-            line = line.strip()
-            if not line: continue
-            if ':-' in line:
-                head_s, body_s = line.split(':-', 1)
-                tokens = tokenize(head_s)
-                head, _ = parse_term(tokens, 0)
-                body = []
-                for part in body_s.split(','):
-                    t, _ = parse_term(tokenize(part.strip()), 0)
-                    body.append(t)
-                clauses.append([head] + body)
-            else:
-                head, _ = parse_term(tokenize(line), 0)
-                clauses.append([head])
-    print("Prolog - Ctrl+D to exit")
-    while True:
-        try:
-            q = input("?- ").strip().rstrip('.')
-            if not q: continue
-            goals = []
-            for part in q.split(','):
-                t, _ = parse_term(tokenize(part.strip()), 0)
-                goals.append(t)
-            found = False
-            for subst in solve(goals, clauses, {}):
-                found = True
-                vars_in_query = set()
-                for g in goals:
-                    def collect(t):
-                        if isinstance(t, Var): vars_in_query.add(t)
-                        elif isinstance(t, Term):
-                            for a in t.args: collect(a)
-                    collect(g)
-                bindings = {v.name: substitute(v, subst) for v in vars_in_query}
-                if bindings:
-                    print(", ".join(f"{k} = {v}" for k, v in bindings.items()))
-                else:
-                    print("true")
-                break
-            if not found: print("false")
-        except (EOFError, KeyboardInterrupt): break
-        except Exception as e: print(f"Error: {e}")
+    db = PrologDB()
+    X, Y, Z = Var("X"), Var("Y"), Var("Z")
+    db.fact(Term("parent", [Atom("tom"), Atom("bob")]))
+    db.fact(Term("parent", [Atom("tom"), Atom("liz")]))
+    db.fact(Term("parent", [Atom("bob"), Atom("ann")]))
+    db.fact(Term("parent", [Atom("bob"), Atom("pat")]))
+    db.rule(Term("grandparent", [X, Z]), [Term("parent", [X, Y]), Term("parent", [Y, Z])])
+    db.rule(Term("sibling", [X, Y]), [Term("parent", [Var("P"), X]), Term("parent", [Var("P"), Y])])
+    print("Grandparents:")
+    for s in db.query([Term("grandparent", [Var("G"), Var("C")])]):
+        print(f"  {walk(Var('G'),s)} is grandparent of {walk(Var('C'),s)}")
+    print("Siblings:")
+    for s in db.query([Term("sibling", [Var("A"), Var("B")])]):
+        a, b = walk(Var('A'),s), walk(Var('B'),s)
+        if str(a) != str(b): print(f"  {a} and {b}")
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()

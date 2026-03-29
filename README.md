@@ -1,11 +1,9 @@
-# prolog-interp
+# Prolog Interpreter
 
-Minimal Prolog interpreter.
-
-Zero dependencies. Python 3.8+.
+Prolog Interpreter — zero-dependency Python implementation.
 
 ## Usage
 
 ```bash
-python3 prolog_interp.py --help
+python3 prolog_interp.py
 ```
