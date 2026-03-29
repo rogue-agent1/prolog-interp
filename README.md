@@ -1,9 +1,13 @@
-# Prolog Interpreter
+# Minimal Prolog Interpreter
 
-Prolog Interpreter — zero-dependency Python implementation.
+Minimal Prolog Interpreter — zero-dependency, single-file Python CLI.
 
 ## Usage
 
 ```bash
-python3 prolog_interp.py
+python3 prolog_interp.py --help
 ```
+
+## License
+
+MIT
